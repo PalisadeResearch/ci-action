@@ -40,7 +40,8 @@ runs:
 
     - name: Direnv
       run: |
-        sudo apt-get install -y direnv
+        sudo apt update
+        sudo apt install -y direnv
         direnv allow
         direnv exec . sh -c 'echo $PATH' > "$GITHUB_PATH"
         direnv export gha >> "$GITHUB_ENV"
