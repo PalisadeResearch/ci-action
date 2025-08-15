@@ -11,49 +11,81 @@ runs:
   steps:
     - uses: cachix/install-nix-action@v30
       with:
-        github_access_token: ${{ inputs.github_access_token }}
+        github_access_token: ${{ github.token }}
+
+    - name: Install direnv
+      uses: andreygubarev/setup-direnv@v1
 
     - name: Set environment
       run: |
-        echo "NIX_CACHE_DIR=/tmp/nix-cache" >> "$GITHUB_ENV"
+        echo "🔨 Setting environment variables..."
         echo "UV_CACHE_DIR=/tmp/uv-cache" >> "$GITHUB_ENV"
         echo "NIX_OS=$(nix eval --impure --raw --expr 'builtins.currentSystem')" >> "$GITHUB_ENV"
+        echo "NIX_CI_SHELL_NAME=default" >> "$GITHUB_ENV"
+        echo "NIX_CI_SHELL_DIR=/tmp/nix-shell-result" >> "$GITHUB_ENV"
       shell: bash
 
-    - name: "Cache Nix store"
+    # Cache uv separately
+    - name: "Cache uv"
       uses: actions/cache@v4
-      id: nix-cache
-      with:
-        path: ${{ env.NIX_CACHE_DIR }}
-        key: build-${{ env.NIX_OS }}-${{ hashFiles('flake.nix', 'flake.lock') }}
-
-    - name: Restore uv cache
-      uses: actions/cache@v4
+      id: uv-cache
       with:
         path: ${{ env.UV_CACHE_DIR }}
         key: uv-${{ env.NIX_OS }}-${{ hashFiles('uv.lock') }}
 
-    - name: "Import Nix store cache"
-      if: steps.nix-cache.outputs.cache-hit == 'true'
-      run: "nix copy --from ${{ env.NIX_CACHE_DIR }} --no-check-sigs ./#devShells.${{ env.NIX_OS }}.default"
+    # Cache Nix evaluation results (flake inputs, evaluation cache)
+    - name: "Cache Nix evaluation"
+      uses: actions/cache@v4
+      with:
+        path: |
+          /home/runner/.cache/nix
+          /home/runner/.local/share/nix
+        key: nix-eval-${{ env.NIX_OS }}-${{ hashFiles('flake.nix') }}-${{ hashFiles('flake.lock') }}
+
+    # Cache the built environment
+    - name: "Cache built environment"
+      uses: actions/cache@v4
+      id: env-cache
+      with:
+        path: ${{ env.NIX_CI_SHELL_DIR }}
+        key: nix-built-${{ env.NIX_OS }}-${{ hashFiles('flake.nix') }}-${{ hashFiles('flake.lock') }}
+
+    # Import cached environment
+    - name: "Import cached environment"
+      if: steps.env-cache.outputs.cache-hit == 'true'
+      run: |
+        echo "📦 Importing cached environment..."
+        nix-store --import < ${{ env.NIX_CI_SHELL_DIR }}/shell-closure.nar
+        echo "✅ Environment imported from cache"
       shell: bash
 
-    - name: Direnv
+    # Build environment only if not cached
+    - name: "Build environment"
+      if: steps.env-cache.outputs.cache-hit != 'true'
       run: |
-        sudo apt update
-        sudo apt install -y direnv
+        echo "🔨 Building environment..."
+        nix build .#devShells.${{ env.NIX_OS }}.${{ env.NIX_CI_SHELL_NAME }} --print-build-logs
+        # Export for caching
+        echo "🔨 Exporting environment for caching..."
+        mkdir -p ${{ env.NIX_CI_SHELL_DIR }}
+        SHELL_PATH=$(nix path-info .#devShells.${{ env.NIX_OS }}.${{ env.NIX_CI_SHELL_NAME }})
+        echo "$SHELL_PATH" > ${{ env.NIX_CI_SHELL_DIR }}/shell-path
+        nix-store --export $(nix-store -qR $SHELL_PATH) > ${{ env.NIX_CI_SHELL_DIR }}/shell-closure.nar
+        echo "✅ Environment built and exported"
+      shell: bash
+
+    - name: "Setup direnv"
+      run: |
+        echo "🔨 Setting up direnv..."
         direnv allow
         direnv exec . sh -c 'echo $PATH' > "$GITHUB_PATH"
         direnv export gha >> "$GITHUB_ENV"
       shell: bash
 
-    - name: "Export Nix store cache"
-      if: steps.nix-cache.outputs.cache-hit != 'true'
-      # --no-check-sigs is required because the shell derivation is not signed
-      # it would be better to only copy shell inputs, but this is easier for now
-      run: "nix copy --to ${{ env.NIX_CACHE_DIR }} --no-check-sigs ./#devShells.${{ env.NIX_OS }}.default"
-      shell: bash
-
-    - name: "Prune uv cache (optional)"
-      run: uv cache prune --ci || true
+    # Prune UV cache only on fresh builds
+    - name: "Prune uv cache"
+      if: steps.uv-cache.outputs.cache-hit != 'true'
+      run: |
+        echo "🧹 Pruning uv cache..."
+        nix develop .#devShells.${{ env.NIX_OS }}.${{ env.NIX_CI_SHELL_NAME }} --command uv cache prune --ci || true
       shell: bash
