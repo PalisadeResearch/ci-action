@@ -64,7 +64,7 @@ runs:
       if: steps.env-cache.outputs.cache-hit != 'true'
       run: |
         echo "🔨 Building environment..."
-        nix build .#devShells.${{ env.NIX_OS }}.${{ env.NIX_CI_SHELL_NAME }} --print-build-logs
+        nix build .#devShells.${{ env.NIX_OS }}.${{ env.NIX_CI_SHELL_NAME }} --print-build-logs --no-link
         # Export for caching
         echo "🔨 Exporting environment for caching..."
         mkdir -p ${{ env.NIX_CI_SHELL_DIR }}
