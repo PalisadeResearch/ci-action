@@ -64,11 +64,10 @@ runs:
       if: steps.env-cache.outputs.cache-hit != 'true'
       run: |
         echo "🔨 Building environment..."
-        nix build .#devShells.${{ env.NIX_OS }}.${{ env.NIX_CI_SHELL_NAME }} --print-build-logs
+        SHELL_PATH=$(nix build .#devShells.${{ env.NIX_OS }}.${{ env.NIX_CI_SHELL_NAME }} --print-build-logs --no-link --print-out-paths)
         # Export for caching
         echo "🔨 Exporting environment for caching..."
         mkdir -p ${{ env.NIX_CI_SHELL_DIR }}
-        SHELL_PATH=$(nix path-info .#devShells.${{ env.NIX_OS }}.${{ env.NIX_CI_SHELL_NAME }})
         echo "$SHELL_PATH" > ${{ env.NIX_CI_SHELL_DIR }}/shell-path
         nix-store --export $(nix-store -qR $SHELL_PATH) > ${{ env.NIX_CI_SHELL_DIR }}/shell-closure.nar
         echo "✅ Environment built and exported"
